@@ -1,125 +1,216 @@
 import streamlit as st
-import matplotlib.pyplot as plt
 import pandas as pd
+import matplotlib.pyplot as plt
 
 from preprocessing import load_and_preprocess
 from anomaly_models import detect_anomalies
 from forecasting import forecast_cost
 from recommendations import generate_recommendations
-from metrics import compute_kpis
 
-st.set_page_config(
-    page_title="Cloud Cost Anomaly Detection",
-    layout="wide"
-)
+# ======================
+# Streamlit Config
+# ======================
+st.set_page_config(page_title="Cloud Cost Anomaly Detection", layout="wide")
 
 st.title("☁️ Cloud Cost Anomaly Detection & Optimization Dashboard")
-st.caption("AI-driven analysis of GCP billing data")
+st.caption("AI-driven GCP billing analysis with FinOps insights")
 
+# ======================
+# File Upload
+# ======================
 uploaded = st.file_uploader("📤 Upload GCP Billing CSV", type=["csv"])
 
 if uploaded:
+    # ======================
+    # Data Pipeline
+    # ======================
     df = load_and_preprocess(uploaded)
     df = detect_anomalies(df)
     df = generate_recommendations(df)
 
-
-    # KPI SECTION
-    
-    total_spend, anomaly_spend, potential_savings = compute_kpis(df)
+    # ======================
+    # KPI Calculation
+    # ======================
+    total_spend = df["Cost"].sum()
+    anomaly_spend = df[df["Final_Anomaly"] == 1]["Cost"].sum()
+    total_savings = df["Estimated_Saving_INR"].sum()
+    avg_cost = df["Cost"].mean()
 
     col1, col2, col3 = st.columns(3)
+    col1.metric("💰 Total Cloud Spend (INR)", f"₹ {total_spend:,.0f}")
+    col2.metric("🚨 Anomalous Spend (INR)", f"₹ {anomaly_spend:,.0f}")
+    col3.metric("💡 Estimated Savings (INR)", f"₹ {total_savings:,.0f}")
 
-    col1.metric(
-        label="💰 Total Cloud Spend (INR)",
-        value=f"₹ {total_spend:,.0f}"
-    )
-
-    col2.metric(
-        label="🚨 Spend in Anomalies (INR)",
-        value=f"₹ {anomaly_spend:,.0f}",
-        delta=f"{(anomaly_spend/total_spend)*100:.1f}% of total"
-    )
-
-    col3.metric(
-        label="💡 Potential Monthly Savings",
-        value=f"₹ {potential_savings:,.0f}"
-    )
-
+    st.success(f"💰 Total Identified Savings Opportunity: ₹{total_savings:,.0f}")
     st.divider()
 
-    # COST + ANOMALY GRAPH
+    # ======================
+    # Monthly Budget Alert
+    # ======================
+    st.subheader("💼 Monthly Budget Monitoring")
 
-    st.subheader(" Cloud Cost Trend with Detected Anomalies")
-
-    fig, ax = plt.subplots(figsize=(12, 5))
-    ax.plot(df["Date"], df["Cost"], label="Daily Cost", linewidth=2)
-
-    ax.scatter(
-        df[df["Final_Anomaly"] == 1]["Date"],
-        df[df["Final_Anomaly"] == 1]["Cost"],
-        color="red",
-        label="Anomalies",
-        s=60
+    monthly_budget = st.number_input(
+        "Set Monthly Budget (INR)",
+        min_value=1000,
+        value=50000,
+        step=5000
     )
 
-    ax.set_xlabel("Date")
-    ax.set_ylabel("Cost (INR)")
-    ax.legend()
-    ax.grid(True)
+    if total_spend > monthly_budget:
+        st.error(f"⚠️ Budget Exceeded by ₹{total_spend - monthly_budget:,.0f}")
+    else:
+        st.success("✅ Spending is within budget")
 
-    st.pyplot(fig)
+    # ======================
+    # Severity Scoring
+    # ======================
+    def calculate_severity(row):
+        if row["Cost"] > avg_cost * 2 or row["Cost_Change"] > 0.6:
+            return "High"
+        elif row["Cost"] > avg_cost * 1.2 or row["Cost_Change"] > 0.3:
+            return "Medium"
+        return "Low"
 
+    df["Severity"] = df.apply(calculate_severity, axis=1)
 
-    # ANOMALY COST BREAKDOWN
+    # ======================
+    # Explainable AI
+    # ======================
+    def explain_anomaly(row):
+        if row["Final_Anomaly"] == 0:
+            return "Normal spending pattern"
+        if row["Cost_Change"] > 0.5:
+            return "Sudden cost spike compared to previous usage"
+        if row["Cost"] > avg_cost:
+            return "Unusually high cost compared to historical average"
+        return "Irregular spending pattern detected by AI models"
 
-    st.subheader(" Where the Money Was Wasted")
+    df["Why_Anomaly"] = df.apply(explain_anomaly, axis=1)
 
-    anomaly_df = df[df["Final_Anomaly"] == 1].copy()
-    anomaly_df["Estimated_Savable"] = anomaly_df["Cost"] * 0.30
+    # ======================
+    # Savings Priority
+    # ======================
+    def saving_priority(amount):
+        if amount > avg_cost * 0.4:
+            return "High Savings"
+        elif amount > avg_cost * 0.2:
+            return "Medium Savings"
+        elif amount > 0:
+            return "Low Savings"
+        return "No Savings"
+
+    df["Savings_Priority"] = df["Estimated_Saving_INR"].apply(saving_priority)
+
+    # ======================
+    # Top-N Cost Drivers
+    # ======================
+    st.subheader("🏆 Top Cost Drivers")
+
+    top_n = st.slider("Select Top N Cost Drivers", 3, 10, 5)
+
+    top_days = (
+        df[df["Final_Anomaly"] == 1]
+        .sort_values("Cost", ascending=False)
+        .head(top_n)
+    )
 
     st.dataframe(
-        anomaly_df[[
-            "Date",
-            "Cost",
-            "Estimated_Savable",
-            "Recommendation"
-        ]],
+        top_days[["Date", "Cost", "Estimated_Saving_INR"]],
         use_container_width=True
     )
 
-  
-    # SAVINGS VISUALIZATION
-    st.subheader(" Cost vs Potential Savings")
+    # ======================
+    # Cost Trend
+    # ======================
+    st.subheader("📈 Cloud Cost Trend (Normal vs Anomalous)")
 
-    savings_df = pd.DataFrame({
-        "Category": ["Normal Spend", "Potentially Savable"],
-        "Amount": [
-            total_spend - potential_savings,
-            potential_savings
-        ]
-    })
+    fig, ax = plt.subplots(figsize=(12, 5))
 
-    fig2, ax2 = plt.subplots()
+    normal_df = df[df["Final_Anomaly"] == 0]
+    anomaly_df = df[df["Final_Anomaly"] == 1]
 
-    ax2.bar(
-        savings_df["Category"],
-        savings_df["Amount"]
+    ax.plot(normal_df["Date"], normal_df["Cost"], color="green", label="Normal Cost")
+    ax.scatter(anomaly_df["Date"], anomaly_df["Cost"], color="red", label="Anomaly", s=60)
+
+    ax.set_ylabel("Cost (INR)")
+    ax.legend()
+    ax.grid(True)
+    st.pyplot(fig)
+
+    # ======================
+    # 🔥 Recommendation-focused Highlighting
+    # ======================
+    st.subheader("💡 Cost-Saving Recommendations")
+
+    display_df = df[df["Final_Anomaly"] == 1][[
+        "Date",
+        "Cost",
+        "Estimated_Saving_INR",
+        "Savings_Priority",
+        "Severity",
+        "Why_Anomaly",
+        "Recommendation"
+    ]].copy()
+
+    def highlight_recommendation(row):
+        if row["Savings_Priority"] == "High Savings":
+            return [
+                ""] * (len(row) - 1) + ["background-color: #2e7d32; color: white; font-weight: 600"]
+        elif row["Savings_Priority"] == "Medium Savings":
+            return [
+                ""] * (len(row) - 1) + ["background-color: #f9a825; color: black; font-weight: 600"]
+        elif row["Savings_Priority"] == "Low Savings":
+            return [
+                ""] * (len(row) - 1) + ["background-color: #c62828; color: white; font-weight: 600"]
+        return [""] * len(row)
+
+    styled_df = display_df.style.apply(highlight_recommendation, axis=1)
+
+    st.dataframe(styled_df, use_container_width=True)
+
+    st.markdown("""
+    **Legend**
+    - 🟢 Green → High savings action  
+    - 🟡 Yellow → Medium savings action  
+    - 🔴 Red → Low savings / monitor  
+    """)
+
+    # ======================
+    # Executive Summary
+    # ======================
+    st.subheader("📄 Executive Summary")
+
+    high_severity_count = (df["Severity"] == "High").sum()
+
+    st.markdown(f"""
+    - **Total Cloud Spend:** ₹{total_spend:,.0f}  
+    - **Anomalous Spend:** ₹{anomaly_spend:,.0f}  
+    - **Estimated Savings:** ₹{total_savings:,.0f}  
+    - **High Severity Incidents:** {high_severity_count}  
+    - **Primary Actions:** Rightsizing, Idle Resource Cleanup, Commitment Discounts  
+    """)
+
+    # ======================
+    # Download Report
+    # ======================
+    st.subheader("⬇️ Download Anomaly Report")
+
+    report_df = df[df["Final_Anomaly"] == 1]
+    csv = report_df.to_csv(index=False).encode("utf-8")
+
+    st.download_button(
+        label="Download CSV Report",
+        data=csv,
+        file_name="cloud_cost_anomaly_report.csv",
+        mime="text/csv"
     )
 
-    ax2.set_ylabel("Amount (INR)")
-    ax2.set_title("Cloud Spend Optimization Opportunity")
-
-    
-    ax2.ticklabel_format(style='plain', axis='y')
-
-    st.pyplot(fig2)
-
-    # FORECAST
-   
-    st.subheader(" Future Cost Forecast (Next 30 Days)")
+    # ======================
+    # Forecast
+    # ======================
+    st.subheader("🔮 Cost Forecast (Next 30 Days)")
     forecast = forecast_cost(df)
     st.line_chart(forecast)
 
 else:
-    st.info("⬆️ Upload your GCP billing CSV to start analysis")
+    st.info("⬆️ Upload your GCP billing CSV file to start analysis.")
